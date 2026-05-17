@@ -1,0 +1,65 @@
+name: Production
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+jobs:
+  deploy-production:
+    name: Deploy auf Production-EC2s
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Notify Slack that we're starting
+      - name: Slack — Pipeline gestartet
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": ":rocket: *Production-Pipeline gestartet*\nAusgelöst von: `${{ github.actor }}`\nWorkflow: `${{ github.workflow }}`\nTag: `${{ github.ref_name }}`\nCommit: `${{ github.sha }}`"
+            }' \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
+
+      # 2) Pull the repo onto the runner
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      # 3) Drop the deploy key, then scan every prod host
+      - name: SSH-Key einrichten
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          for ip in ${{ secrets.EC2_IPS_PROD }}; do
+            ssh-keyscan -H "$ip" >> ~/.ssh/known_hosts
+          done
+
+      # 4) Loop scp over every prod IP
+      - name: index.html auf alle Production-Maschinen kopieren
+        run: |
+          for ip in ${{ secrets.EC2_IPS_PROD }}; do
+            echo "Deploying nach $ip ..."
+            scp -i ~/.ssh/deploy_key \
+              frontend/index.html \
+              ubuntu@$ip:/var/www/html/index.html
+          done
+
+      # 5) On success
+      - name: Slack — Erfolg
+        if: ${{ success() }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": ":white_check_mark: *Production-Deployment erfolgreich*\nAusgelöst von: `${{ github.actor }}`\nWorkflow: `${{ github.workflow }}`\nTag: `${{ github.ref_name }}`\nZiele: `${{ secrets.EC2_IPS_PROD }}`"
+            }' \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
+
+      # 6) On failure
+      - name: Slack — Fehler
+        if: ${{ failure() }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": ":x: *Production-Deployment fehlgeschlagen*\nAusgelöst von: `${{ github.actor }}`\nWorkflow: `${{ github.workflow }}`\nTag: `${{ github.ref_name }}`\nLogs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }' \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
