@@ -1,0 +1,59 @@
+name: Staging
+
+on:
+  push:
+    branches: [main]
+
+jobs:
+  deploy-staging:
+    name: Deploy auf Staging-EC2
+    runs-on: ubuntu-latest
+
+    steps:
+      # 1) Notify Slack that we're starting
+      - name: Slack — Pipeline gestartet
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": ":rocket: *Staging-Pipeline gestartet*\nAusgelöst von: `${{ github.actor }}`\nWorkflow: `${{ github.workflow }}`\nCommit: `${{ github.sha }}`"
+            }' \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
+
+      # 2) Pull the repo onto the runner
+      - name: Code auschecken
+        uses: actions/checkout@v4
+
+      # 3) Drop the deploy key onto the runner and trust the host
+      - name: SSH-Key einrichten
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.SSH_PRIVATE_KEY }}" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          ssh-keyscan -H "${{ secrets.EC2_IP_STAGING }}" >> ~/.ssh/known_hosts
+
+      # 4) Copy the built site to nginx's docroot
+      - name: index.html nach Staging kopieren
+        run: |
+          scp -i ~/.ssh/deploy_key \
+            frontend/index.html \
+            ubuntu@${{ secrets.EC2_IP_STAGING }}:/var/www/html/index.html
+
+      # 5) On success
+      - name: Slack — Erfolg
+        if: ${{ success() }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": ":white_check_mark: *Staging-Deployment erfolgreich*\nAusgelöst von: `${{ github.actor }}`\nWorkflow: `${{ github.workflow }}`\nURL: http://${{ secrets.EC2_IP_STAGING }}"
+            }' \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
+
+      # 6) On failure
+      - name: Slack — Fehler
+        if: ${{ failure() }}
+        run: |
+          curl -X POST -H 'Content-type: application/json' \
+            --data '{
+              "text": ":x: *Staging-Deployment fehlgeschlagen*\nAusgelöst von: `${{ github.actor }}`\nWorkflow: `${{ github.workflow }}`\nLogs: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+            }' \
+            "${{ secrets.SLACK_WEBHOOK_URL }}"
